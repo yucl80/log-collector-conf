@@ -1,0 +1,134 @@
+input {
+    file {
+        path => ["/host/var/log/*"]
+        codec => plain { charset => "GBK" }
+        discover_interval => 120
+        stat_interval => 2
+        sincedb_path => "{{.SincedbRoot}}/host.sincedb"
+        ignore_older => {{.IgnoreOlder}}
+        start_position => "beginning"
+        exclude => "sincedb"
+    }{{  $sincedbRoot := .SincedbRoot}}{{ $ignoreOlder := .IgnoreOlder }}
+    {{ range $k, $v := .ContainerInfoMap }}{{ if ne $v.MountSource "" }}
+    file {
+        path => ["/docker/volumes/{{ $v.MountSource }}/rtlog/*/*.acc","/docker/volumes/{{ $v.MountSource }}/rtlog/*/gc.log*"]
+        codec => plain { charset => "GBK" }
+        discover_interval => 30
+        stat_interval => 1
+        sincedb_path => "{{ $sincedbRoot}}/{{$v.ID}}.sincedb1"
+        ignore_older => {{$ignoreOlder}}
+        start_position => "beginning"
+        add_field => { "stack" => "{{ $v.Stack }}" }
+        add_field => { "service" => "{{ $v.Service }}" }
+        add_field => { "index" => "{{ $v.Index}}" }
+        add_field => { "name" => "{{ $v.Name }}" }
+    }
+    file {
+        path => ["/docker/volumes/{{ $v.MountSource }}/rtlog/*/common-all.log*"]
+        discover_interval => 30
+        stat_interval => 1
+        sincedb_path => "{{ $sincedbRoot}}/{{$v.ID}}.sincedb2"
+        ignore_older => {{$ignoreOlder}}
+        start_position => "beginning"
+        add_field => { "stack" => "{{ $v.Stack }}" }
+        add_field => { "service" => "{{ $v.Service }}" }
+        add_field => { "index" => "{{ $v.Index}}" }
+        add_field => { "name" => "{{ $v.Name }}" }
+        codec => multiline {
+          pattern => "^%{TIMESTAMP_ISO8601} "
+          negate => true
+          charset => "GBK"
+          what => "previous"
+        }
+    }{{ end }}
+    file {
+        path => "/docker/containers/{{ $v.ID}}/*.log"
+        discover_interval => 30
+        stat_interval => 1
+        sincedb_path => "{{ $sincedbRoot}}/{{$v.ID}}.sincedb3"
+        ignore_older => {{$ignoreOlder}}
+        start_position => "beginning"
+        add_field => { "stack" => "{{ $v.Stack }}" }
+        add_field => { "service" => "{{ $v.Service }}" }
+        add_field => { "index" => "{{ $v.Index}}" }
+        add_field => { "name" => "{{ $v.Name }}" }
+    }{{ end }}
+}
+
+filter {
+ mutate {
+    gsub => [
+      "path", "/docker/volumes/[^/]+/_data/", "/mwbase/applogs/"
+    ]
+    update => { "host" => "{{.Host}}" }
+  }
+
+  grok {
+    match => { "message" =>[
+     "%{TIMESTAMP_ISO8601:timestamp}","%{HTTPDATE:timestamp}",
+     "(?<timestamp>%{DATE_US}|%{DATE_EU}|%{MONTHDAY}[./-]%{MONTH}[./-]%{YEAR} %{TIME})","%{DATESTAMP:timestamp}"
+     ]}
+  }
+  date {
+      match => [ "timestamp","ISO8601","dd-MMM-yyyy HH:mm:ss.SSS","dd/MMM/yyyy:HH:mm:ss Z","YYYY-MM-dd HH:mm:ss",
+          "YYYY-MM-dd HH:mm:ss,SSS" ]
+      timezone => "Asia/Shanghai"
+  }
+
+  mutate {
+   remove_field => ["@version","tags","timestamp"]
+   remove_tag => ["multiline"]
+  }
+}
+
+output {
+  if [path] =~ "\.acc" {
+    kafka {
+      bootstrap_servers =>"{{ .BootstrapServers }}"
+      topic_id =>"acclog"
+      message_key => "{{.Host}}"
+      batch_size => 200
+      codec => "json"
+    }
+   } else if [path] =~ "common-all" {
+    kafka {
+      bootstrap_servers =>"{{ .BootstrapServers }}"
+      topic_id => "applog"
+      message_key => "{{.Host}}"
+      compression_type => "snappy"
+      codec => "json"
+    }
+  } else if [path] =~ "host" {
+    kafka {
+      bootstrap_servers =>"{{ .BootstrapServers }}"
+      topic_id => "hostsyslog"
+      message_key => "{{.Host}}"
+      compression_type => "snappy"
+      codec => "json"
+    }
+  } else if [path] =~ "gc.log" {
+    kafka {
+      bootstrap_servers =>"{{ .BootstrapServers }}"
+      topic_id => "gclog"
+      message_key => "{{.Host}}"
+      compression_type => "snappy"
+      codec => "json"
+    }
+  } else if [path] =~ "json.log" {
+    kafka {
+      bootstrap_servers =>"{{ .BootstrapServers }}"
+      topic_id => "containerlog"
+      message_key => "{{.Host}}"
+      compression_type => "snappy"
+      codec => "json"
+    }
+  } else  if [path] =~ "access" {
+    kafka {
+      bootstrap_servers =>"{{ .BootstrapServers }}"
+      topic_id =>"acclog"
+      message_key => "{{.Host}}"
+      batch_size => 200
+      codec => "json"
+     }
+   }
+ }
