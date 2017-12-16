@@ -15,16 +15,16 @@ import (
 	"syscall"
 	"os/signal"
 	"path/filepath"
-	"time"
 )
 
 var (
 	tmpl             string
 	host             = ""
 	bootstrapServers = ""
-	workDataRoot     = "/tmp"
+	workDataRoot     = "/data/filebeat"
 	ignoreOlder      = "172800"
-	targetFilename   = ""
+	targetFilename   = "/tmp/conf.d/filebeat.yml"
+	templateFilename = "template/conf.gotmpl"
 	logBaseTag       = "/mwbase/applogs"
 )
 
@@ -60,18 +60,17 @@ func init() {
 
 func main() {
 	initSysSignal()
-	v_data_root := os.Getenv("WORK_DATA_ROOT")
-	if v_data_root != "" && v_data_root != "/" {
-		workDataRoot = v_data_root
+	vDataRoot := os.Getenv("WORK_DATA_ROOT")
+	if vDataRoot != "" && vDataRoot != "/" {
+		workDataRoot = vDataRoot
 	}
-	v_logBaseTag := os.Getenv("LOG_BASE_TAG")
-	if v_logBaseTag != "" {
-		logBaseTag = v_logBaseTag
+	vLogBaseTag := os.Getenv("LOG_BASE_TAG")
+	if vLogBaseTag != "" {
+		logBaseTag = vLogBaseTag
 	}
-	v_filename := os.Getenv("CONF_FILENAME")
-	if v_filename != "" {
-		fmt.Printf("target conf filename is empty,please set env CONF_FILENAME \n")
-		targetFilename = v_filename
+	vFilename := os.Getenv("CONF_FILENAME")
+	if vFilename != "" {
+		targetFilename = vFilename
 	}
 	cleanSincedb := os.Getenv("CLEAN_ALL_SINCEDB")
 	if cleanSincedb == "true" {
@@ -82,10 +81,11 @@ func main() {
 	bootstrapServers = os.Getenv("KAFKA_BOOTSTRAP_SERVERS")
 	if bootstrapServers == "" {
 		fmt.Printf("kafka bootstrap server is empty,please set env KAFKA_BOOTSTRAP_SERVERS \n")
+		return
 	}
-	v_ignoreOlder := os.Getenv("LOG_IGNORE_OLDER")
-	if v_ignoreOlder != "" {
-		ignoreOlder = v_ignoreOlder
+	vIgnoreOlder := os.Getenv("LOG_IGNORE_OLDER")
+	if vIgnoreOlder != "" {
+		ignoreOlder = vIgnoreOlder
 	}
 	c := make(chan ContainerChangeEvent, 1)
 	go CreateConfig(c)
@@ -159,7 +159,6 @@ loop:
 					action: "destroy",
 					Info:   map[string]*ContainerInfo{e.ID: nil},
 				}
-				go removeContainerSincedb(e.ID)
 			}
 
 		}
@@ -167,16 +166,8 @@ loop:
 
 }
 
-func removeContainerSincedb(containerID string) {
-	time.Sleep(300 * time.Second)
-	files, _ := filepath.Glob(workDataRoot + "/" + containerID + ".*")
-	for _, file := range files {
-		os.Remove(file)
-	}
-}
-
 func removeAllSincedb() {
-	files, _ := filepath.Glob(workDataRoot + "/*.*")
+	files, _ := filepath.Glob(workDataRoot + "/data/*.*")
 	for _, file := range files {
 		os.Remove(file)
 	}
@@ -184,12 +175,12 @@ func removeAllSincedb() {
 
 func getContainerInfo(cli *client.Client, containerID string) (*ContainerInfo, error) {
 	json, _ := cli.ContainerInspect(context.Background(), containerID)
-	var logbase string
+	var logBase string
 	for _, mount := range json.Mounts {
 		if mount.Destination == logBaseTag {
 			p1 := filepath.Dir(mount.Source)
 			p1 = filepath.Dir(p1)
-			logbase, _ = filepath.Rel(p1, mount.Source)
+			logBase, _ = filepath.Rel(p1, mount.Source)
 			break
 		}
 	}
@@ -203,7 +194,7 @@ func getContainerInfo(cli *client.Client, containerID string) (*ContainerInfo, e
 
 	return &ContainerInfo{
 		ID:          containerID,
-		MountSource: logbase,
+		MountSource: logBase,
 		Stack:       stackName,
 		Service:     serviceName,
 		Index:       index,
@@ -238,8 +229,7 @@ func CreateConfig(c <-chan ContainerChangeEvent) {
 }
 
 func getTmplFromFile() error {
-	filename := "template/conf.gotmpl"
-	file, err := os.Open(filename)
+	file, err := os.Open(templateFilename)
 	if err != nil {
 		return fmt.Errorf("create config file error: %s", err.Error())
 	}
@@ -247,7 +237,7 @@ func getTmplFromFile() error {
 
 	fileContent, err := ioutil.ReadAll(file)
 	if err != nil {
-		return fmt.Errorf("read from %s error: %s", filename, err.Error())
+		return fmt.Errorf("read from %s error: %s", templateFilename, err.Error())
 	}
 
 	tmpl = string(fileContent)
@@ -272,9 +262,9 @@ func createConfig(cl map[string]*ContainerInfo) {
 	}
 	err = t.Execute(file, vars)
 	if err != nil {
-		fmt.Printf("create logstash conf failed: %s\n", err)
+		fmt.Printf("create conf failed: %s\n", err)
 	} else {
-		fmt.Printf("create logstash conf success\n")
+		fmt.Printf("create conf success\n")
 	}
 
 }
