@@ -1,0 +1,73 @@
+{{ $sincedbRoot := .SincedbRoot }}{{ $host := .Host }}
+path.data: {{ $sincedbRoot }}/data
+path.logs: {{ $sincedbRoot }}/log
+
+filebeat.prospectors:
+{{ range $k, $v := .ContainerInfoMap }}{{ if ne $v.MountSource "" }}
+- type: log
+  enabled: true
+  paths:
+    - /docker/volumes/{{ $v.MountSource }}/rtlog/*/*.acc
+  fields:
+    stack: {{ $v.Stack }}
+    service: {{ $v.Service }}
+    index: {{ $v.Index }}
+    name: {{ $v.Name }}
+    host: {{ $host }}
+    topic: acclog
+  fields_under_root: true
+
+- type: log
+  enabled: true
+  paths:
+    - /docker/volumes/{{ $v.MountSource }}/rtlog/*/common-all.log*
+  fields:
+    stack: {{ $v.Stack }}
+    service: {{ $v.Service }}
+    index: {{ $v.Index }}
+    name: {{ $v.Name }}
+    host: {{ $host }}
+    topic: applog
+  fields_under_root: true
+  multiline.pattern: '^\[[0-9]{4}-[0-9]{2}-[0-9]{2}'
+  multiline.negate: false
+  multiline.match: after
+
+- type: log
+  enabled: true
+  paths:
+    - /docker/volumes/{{ $v.MountSource }}/rtlog/*/gc.log*
+  fields:
+    stack: {{ $v.Stack }}
+    service: {{ $v.Service }}
+    index: {{ $v.Index }}
+    name: {{ $v.Name }}
+    host: {{ $host }}
+    topic: gclog
+  fields_under_root: true
+ {{ end }}
+
+- type: log
+  enabled: true
+  paths:
+    - /docker/containers/{{ $v.ID}}/*.log*
+  fields:
+    stack: {{ $v.Stack }}
+    service: {{ $v.Service }}
+    index: {{ $v.Index }}
+    name: {{ $v.Name }}
+    host: {{ $host }}
+    topic: containerlog
+  fields_under_root: true
+  json.keys_under_root: true
+  {{ end }}
+
+output.kafka:
+  hosts: [{{ .BootstrapServers }}]
+  topic: '%{[topic]}'
+  partition.round_robin:
+    reachable_only: false
+  key: {{ $host }}
+  required_acks: 1
+  compression: gzip
+  max_message_bytes: 1000000
